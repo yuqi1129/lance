@@ -18,6 +18,7 @@ import org.lance.cleanup.RemovalStats;
 import org.lance.compaction.CompactionOptions;
 import org.lance.delta.DatasetDelta;
 import org.lance.index.Index;
+import org.lance.index.IndexDescription;
 import org.lance.index.IndexOptions;
 import org.lance.index.IndexParams;
 import org.lance.index.IndexType;
@@ -980,6 +981,27 @@ public class Dataset implements Closeable {
   }
 
   private native List<Index> nativeGetIndexes();
+
+  /**
+   * Describe an index by name, providing detailed statistics and metadata.
+   *
+   * <p>This returns information about the index including its type, distance metric (for vector
+   * indices), and coverage statistics showing how many rows are indexed vs unindexed.
+   *
+   * @param indexName the name of the index to describe
+   * @return IndexDescription containing index metadata and statistics
+   * @throws IllegalArgumentException if the index does not exist
+   */
+  public IndexDescription describeIndex(String indexName) {
+    try (LockManager.ReadLock readLock = lockManager.acquireReadLock()) {
+      Preconditions.checkArgument(nativeDatasetHandle != 0, "Dataset is closed");
+      Preconditions.checkArgument(
+          indexName != null && !indexName.isEmpty(), "indexName cannot be null or empty");
+      return nativeDescribeIndex(indexName);
+    }
+  }
+
+  private native IndexDescription nativeDescribeIndex(String indexName);
 
   /**
    * Get the table config of the dataset.

@@ -255,6 +255,47 @@ pub trait DatasetIndexExt {
         criteria: Option<IndexCriteria<'b>>,
     ) -> Result<Vec<Arc<dyn IndexDescription>>>;
 
+    /// Describes a single index by name
+    ///
+    /// This is a convenience method that filters `describe_indices` to a single index.
+    ///
+    /// This method should only access the index metadata and should not load the index into memory.
+    ///
+    /// # Parameters
+    /// - `index_name`: the name of the index to describe
+    ///
+    /// # Returns
+    /// - `Ok(Some(description))`: if the index exists
+    /// - `Ok(None)`: if no index with the given name exists
+    /// - `Err(e)`: if there is an error loading index metadata
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use lance::dataset::Dataset;
+    /// use lance_index::DatasetIndexExt;
+    ///
+    /// # async fn example() -> lance_core::Result<()> {
+    /// let dataset = Dataset::open("path/to/dataset").await?;
+    /// 
+    /// if let Some(desc) = dataset.describe_index("my_index").await? {
+    ///     println!("Index name: {}", desc.name());
+    ///     println!("Index type: {}", desc.index_type());
+    ///     println!("Rows indexed: {}", desc.rows_indexed());
+    /// } else {
+    ///     println!("Index not found");
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    async fn describe_index(
+        &self,
+        index_name: &str,
+    ) -> Result<Option<Arc<dyn IndexDescription>>> {
+        let indices = self.describe_indices(None).await?;
+        Ok(indices.into_iter().find(|idx| idx.name() == index_name))
+    }
+
     /// Loads a specific index with the given index name.
     async fn load_scalar_index<'a, 'b>(
         &'a self,

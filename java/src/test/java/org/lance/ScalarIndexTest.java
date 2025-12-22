@@ -14,6 +14,7 @@
 package org.lance;
 
 import org.lance.index.Index;
+import org.lance.index.IndexDescription;
 import org.lance.index.IndexOptions;
 import org.lance.index.IndexParams;
 import org.lance.index.IndexType;
@@ -360,6 +361,42 @@ public class ScalarIndexTest {
         // Currently the Java API doesn't expose index configuration details,
         // but we could add a getIndexDetails() method in the future to verify
         // that the rows_per_zone parameter was correctly set to 1024
+      }
+    }
+  }
+
+  @Test
+  public void testDescribeIndex() throws Exception {
+    String datasetPath = tempDir.resolve("describe_index_test").toString();
+    try (BufferAllocator allocator = new RootAllocator()) {
+      TestUtils.SimpleTestDataset testDataset =
+          new TestUtils.SimpleTestDataset(allocator, datasetPath);
+      testDataset.createEmptyDataset().close();
+
+      // Write some data
+      try (Dataset dataset = testDataset.write(1, 100)) {
+        
+        // Create a BTree index
+        ScalarIndexParams scalarParams = ScalarIndexParams.create("btree", "{}");
+        IndexParams indexParams = IndexParams.builder().setScalarIndexParams(scalarParams).build();
+        dataset.createIndex(
+            Collections.singletonList("id"),
+            IndexType.BTREE,
+            Optional.of("test_btree_index"),
+            indexParams,
+            true);
+
+        // Describe the index
+        IndexDescription description = dataset.describeIndex("test_btree_index");
+
+        // Verify the description
+        assertEquals("BTREE", description.getIndexType(), "Index type should be BTREE");
+        assertTrue(description.getNumIndexedRows() != null && description.getNumIndexedRows() > 0,
+            "Should have indexed rows");
+        
+        // Distance type should be null for scalar indices
+        assertEquals(null, description.getDistanceType(), 
+            "Distance type should be null for scalar index");
       }
     }
   }

@@ -2464,3 +2464,83 @@ async fn test_auto_infer_lance_tokenizer() {
         .unwrap();
     assert_eq!(1, batch.num_rows());
 }
+
+#[tokio::test]
+async fn test_describe_index() -> Result<()> {
+    use tempfile::tempdir;
+    let temp_dir = tempdir()?;
+    let dataset_path = temp_dir.path().join("test_describe_index");
+
+    // Create a simple dataset
+    let values: Vec<i32> = (0..100).collect();
+    let array = Int32Array::from(values.clone());
+    let text_array = StringArray::from(
+        values
+            .iter()
+            .map(|i| format!("document about lance {}", i))
+            .collect::<Vec<_>>(),
+    );
+    
+    let schema = Arc::new(ArrowSchema::new(vec![
+        ArrowField::new("ints", DataType::Int32, false),
+        ArrowField::new("text", DataType::Utf8, false),
+    ]));
+    
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![Arc::new(array), Arc::new(text_array)],
+    )?;
+    
+    let batch_reader = RecordBatchIterator::new(vec![Ok(batch)], schema.clone());
+    let mut dataset = Dataset::write(
+        batch_reader,
+        dataset_path.to_str().unwrap(),
+        None,
+    )
+    .await?;
+
+    // Create multiple indices
+    dataset
+        .create_index(
+            &["ints"],
+            IndexType::Scalar,
+            Some("ints_btree_idx".to_string()),
+            &ScalarIndexParams::default(),
+            false,
+        )
+        .await?;
+
+    dataset
+        .create_index(
+            &["text"],
+            IndexType::Inverted,
+            Some("text_fts_idx".to_string()),
+            &InvertedIndexParams::default(),
+            false,
+        )
+        .await?;
+
+    // Test describe_index for existing index
+    let btree_desc = dataset.describe_index("ints_btree_idx").await?;
+    assert!(btree_desc.is_some());
+    
+    let btree_desc = btree_desc.unwrap();
+    assert_eq!(btree_desc.name(), "ints_btree_idx");
+    assert_eq!(btree_desc.index_type(), "BTree");
+    assert_eq!(btree_desc.rows_indexed(), 100);
+    
+    // Test describe_index for FTS index
+    let fts_desc = dataset.describe_index("text_fts_idx").await?;
+    assert!(fts_desc.is_some());
+    
+    let fts_desc = fts_desc.unwrap();
+    assert_eq!(fts_desc.name(), "text_fts_idx");
+    assert_eq!(fts_desc.index_type(), "Inverted");
+    assert_eq!(fts_desc.rows_indexed(), 100);
+    
+    // Test describe_index for non-existent index
+    let nonexistent = dataset.describe_index("nonexistent_idx").await?;
+    assert!(nonexistent.is_none());
+
+    Ok(())
+}

@@ -2503,6 +2503,151 @@ fn inner_get_indexes<'local>(
 }
 
 #[no_mangle]
+pub extern "system" fn Java_org_lance_Dataset_nativeDescribeIndex<'local>(
+    mut env: JNIEnv<'local>,
+    java_dataset: JObject,
+    jindex_name: JString,
+) -> JObject<'local> {
+    ok_or_throw!(env, inner_describe_index(&mut env, java_dataset, jindex_name))
+}
+
+fn inner_describe_index<'local>(
+    env: &mut JNIEnv<'local>,
+    java_dataset: JObject,
+    jindex_name: JString,
+) -> Result<JObject<'local>> {
+    let index_name: String = jindex_name.extract(env)?;
+    
+    let (index_meta, dataset) = {
+        let dataset_guard =
+            unsafe { env.get_rust_field::<_, _, BlockingDataset>(java_dataset, NATIVE_DATASET) }?;
+        let indexes = dataset_guard.list_indexes()?;
+        
+        // Find the index by name
+        let index = indexes
+            .iter()
+            .find(|idx| idx.name == index_name)
+            .ok_or_else(|| {
+                Error::input_error(format!("Index '{}' not found", index_name))
+            })?;
+        
+        ((**index).clone(), dataset_guard.inner.clone())
+    };
+
+    // Parse index type from index_details
+    // For now, we'll use a simplified approach - just check the type_url
+    let (index_type_str, distance_type): (&str, Option<&str>) = if let Some(details) = &index_meta.index_details {
+        if details.type_url.contains("VectorIndexMetadata") || details.type_url.contains("vector") {
+            ("VECTOR", None)
+        } else if details.type_url.contains("BTree") || details.type_url.contains("btree") {
+            ("BTREE", None)
+        } else if details.type_url.contains("Bitmap") || details.type_url.contains("bitmap") {
+            ("BITMAP", None)
+        } else if details.type_url.contains("LabelList") || details.type_url.contains("label") {
+            ("LABEL_LIST", None)
+        } else {
+            ("UNKNOWN", None)
+        }
+    } else {
+        ("UNKNOWN", None)
+    };
+
+    // Calculate indexed and unindexed rows
+    let (num_indexed_rows, num_unindexed_rows) = RT.block_on(async {
+        let total_rows = dataset.count_rows(None).await?;
+        
+        // Get all fragment IDs in the dataset
+        let all_fragments = dataset.get_fragments();
+        let all_fragment_ids: roaring::RoaringBitmap = all_fragments
+            .iter()
+            .map(|f| f.id() as u32)
+            .collect();
+        
+        // Get indexed fragment IDs
+        let indexed_rows = if let Some(fragment_bitmap) = &index_meta.fragment_bitmap {
+            let effective_bitmap = fragment_bitmap & &all_fragment_ids;
+            
+            // Count rows in indexed fragments
+            let mut count = 0u64;
+            for frag in all_fragments.iter() {
+                if effective_bitmap.contains(frag.id() as u32) {
+                    count += frag.count_rows().await? as u64;
+                }
+            }
+            count
+        } else {
+            // No fragment bitmap means we don't know which fragments are indexed
+            // For newly created indices on all fragments, assume all rows are indexed
+            total_rows as u64
+        };
+        
+        let unindexed_rows = (total_rows as u64).saturating_sub(indexed_rows);
+        
+        Ok::<(u64, u64), lance::Error>((indexed_rows, unindexed_rows))
+    })?;
+
+    // Create Java IndexDescription object using the builder pattern
+    let builder_class = env.find_class("org/lance/index/IndexDescription$Builder")?;
+    let builder = env.new_object(builder_class, "()V", &[])?;
+
+    // Set index type
+    let jindex_type = env.new_string(index_type_str)?;
+    env.call_method(
+        &builder,
+        "indexType",
+        "(Ljava/lang/String;)Lorg/lance/index/IndexDescription$Builder;",
+        &[JValue::Object(&jindex_type)],
+    )?;
+
+    // Set distance type if available
+    if let Some(dist_type) = distance_type {
+        let jdist_type = env.new_string(dist_type)?;
+        env.call_method(
+            &builder,
+            "distanceType",
+            "(Ljava/lang/String;)Lorg/lance/index/IndexDescription$Builder;",
+            &[JValue::Object(&jdist_type)],
+        )?;
+    }
+
+    // Set num_indexed_rows
+    let jnum_indexed = env.new_object(
+        "java/lang/Long",
+        "(J)V",
+        &[JValue::Long(num_indexed_rows as i64)],
+    )?;
+    env.call_method(
+        &builder,
+        "numIndexedRows",
+        "(Ljava/lang/Long;)Lorg/lance/index/IndexDescription$Builder;",
+        &[JValue::Object(&jnum_indexed)],
+    )?;
+
+    // Set num_unindexed_rows
+    let jnum_unindexed = env.new_object(
+        "java/lang/Long",
+        "(J)V",
+        &[JValue::Long(num_unindexed_rows as i64)],
+    )?;
+    env.call_method(
+        &builder,
+        "numUnindexedRows",
+        "(Ljava/lang/Long;)Lorg/lance/index/IndexDescription$Builder;",
+        &[JValue::Object(&jnum_unindexed)],
+    )?;
+
+    // Build and return
+    let description = env.call_method(
+        &builder,
+        "build",
+        "()Lorg/lance/index/IndexDescription;",
+        &[],
+    )?.l()?;
+
+    Ok(description)
+}
+
+#[no_mangle]
 pub extern "system" fn Java_org_lance_Dataset_nativeCountIndexedRows(
     mut env: JNIEnv,
     java_dataset: JObject,

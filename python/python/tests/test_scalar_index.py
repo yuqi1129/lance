@@ -4194,3 +4194,46 @@ def test_describe_indices(tmp_path):
     indices = ds.describe_indices()
     for index in indices:
         assert index.num_rows_indexed == 50
+
+
+def test_describe_index(tmp_path):
+    """Test describe_index method for single index retrieval"""
+    data = pa.table(
+        {
+            "id": range(100),
+            "text": [f"document {i} about lance database" for i in range(100)],
+            "bitmap": range(100),
+            "btree": range(100),
+        }
+    )
+    ds = lance.write_dataset(data, tmp_path)
+    
+    # Create multiple indices
+    ds.create_scalar_index("text", index_type="INVERTED")
+    ds.create_scalar_index("bitmap", index_type="BITMAP")
+    ds.create_scalar_index("btree", index_type="BTREE")
+    
+    # Test describe_index for existing index
+    text_idx = ds.describe_index("text_idx")
+    assert text_idx.name == "text_idx"
+    assert text_idx.index_type == "Inverted"
+    assert text_idx.num_rows_indexed == 100
+    assert text_idx.field_names == ["text"]
+    
+    # Test describe_index for another existing index
+    bitmap_idx = ds.describe_index("bitmap_idx")
+    assert bitmap_idx.name == "bitmap_idx"
+    assert bitmap_idx.index_type == "Bitmap"
+    assert bitmap_idx.num_rows_indexed == 100
+    assert bitmap_idx.field_names == ["bitmap"]
+    
+    # Test describe_index for btree index
+    btree_idx = ds.describe_index("btree_idx")
+    assert btree_idx.name == "btree_idx"
+    assert btree_idx.index_type == "BTree"
+    assert btree_idx.num_rows_indexed == 100
+    assert btree_idx.field_names == ["btree"]
+    
+    # Test describe_index for non-existent index
+    with pytest.raises(KeyError, match="Index 'nonexistent_idx' not found"):
+        ds.describe_index("nonexistent_idx")

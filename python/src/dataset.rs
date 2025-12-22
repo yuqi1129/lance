@@ -2650,6 +2650,22 @@ impl Dataset {
             .collect())
     }
 
+    #[pyo3(signature=(index_name))]
+    fn describe_index(&self, py: Python<'_>, index_name: &str) -> PyResult<PyIndexDescription> {
+        let new_self = self.ds.as_ref().clone();
+        let index = rt()
+            .block_on(Some(py), new_self.describe_index(index_name))?
+            .infer_error()?;
+        
+        match index {
+            Some(desc) => Ok(PyIndexDescription::new(desc.as_ref(), self.ds.as_ref())),
+            None => Err(PyKeyError::new_err(format!(
+                "Index '{}' not found",
+                index_name
+            ))),
+        }
+    }
+
     /// Create a delta builder to explore changes between dataset versions.
     #[pyo3(signature=())]
     fn delta(&self) -> PyResult<DatasetDeltaBuilder> {

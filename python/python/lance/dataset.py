@@ -669,6 +669,49 @@ class LanceDataset(pa.dataset.Dataset):
         """Returns index information for all indices in the dataset."""
         return self._ds.describe_indices()
 
+    def describe_index(self, index_name: str) -> IndexDescription:
+        """
+        Returns index information for a specific index by name.
+
+        This is a convenience method that provides information about a single index
+        including its type, the number of rows indexed, and other metadata.
+
+        Parameters
+        ----------
+        index_name : str
+            The name of the index to describe.
+
+        Returns
+        -------
+        IndexDescription
+            An object containing metadata and statistics about the index.
+
+        Raises
+        ------
+        KeyError
+            If no index with the given name exists.
+
+        Examples
+        --------
+        >>> import lance
+        >>> dataset = lance.dataset("path/to/dataset")
+        >>> # Create an index
+        >>> dataset.create_index("id", "BTREE", name="id_index")
+        >>> # Describe the index
+        >>> desc = dataset.describe_index("id_index")
+        >>> print(f"Index type: {desc.index_type}")
+        >>> print(f"Rows indexed: {desc.num_rows_indexed}")
+
+        See Also
+        --------
+        describe_indices : Get information about all indices in the dataset.
+        """
+        indices = self.describe_indices()
+        for index in indices:
+            if index.name == index_name:
+                return index
+        raise KeyError(f"Index '{index_name}' not found")
+
     def index_statistics(self, index_name: str) -> Dict[str, Any]:
         warnings.warn(
             "LanceDataset.index_statistics() is deprecated, "
