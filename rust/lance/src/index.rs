@@ -58,7 +58,7 @@ use lance_io::utils::{
 };
 use lance_table::format::IndexMetadata;
 use lance_table::format::{Fragment, SelfDescribingFileReader};
-use lance_table::io::manifest::read_manifest_indexes;
+use lance_table::io::manifest::{read_manifest_indexes, read_manifest_indexes_by_name};
 use roaring::RoaringBitmap;
 use scalar::index_matches_criteria;
 use serde_json::json;
@@ -86,7 +86,9 @@ use crate::index::frag_reuse::{load_frag_reuse_index_details, open_frag_reuse_in
 use crate::index::mem_wal::open_mem_wal_index;
 pub use crate::index::prefilter::{FilterLoader, PreFilter};
 use crate::index::scalar::{fetch_index_details, load_training_data, IndexDetails};
-use crate::session::index_caches::{FragReuseIndexKey, IndexMetadataKey};
+use crate::session::index_caches::{
+    FragReuseIndexKey, IndexMetadataByNameKey, IndexMetadataKey,
+};
 use crate::{dataset::Dataset, Error, Result};
 pub use create::CreateIndexBuilder;
 
@@ -646,6 +648,66 @@ impl DatasetIndexExt for Dataset {
         Ok(())
     }
 
+    async fn load_indices_by_name(&self, name: &str) -> Result<Vec<IndexMetadata>> {
+        let metadata_key = IndexMetadataByNameKey {
+            version: self.version().version,
+            name,
+        };
+        if let Some(indices) = self.index_cache.get_with_key(&metadata_key).await {
+            return Ok(indices.as_ref().clone());
+        }
+
+        let mut names = vec![name];
+        if name != FRAG_REUSE_INDEX_NAME {
+            names.push(FRAG_REUSE_INDEX_NAME);
+        }
+
+        let mut indices = read_manifest_indexes_by_name(
+            &self.object_store,
+            &self.manifest_location,
+            &self.manifest,
+            &names,
+        )
+        .await?;
+        retain_supported_indices(&mut indices);
+
+        let frag_reuse_index_meta = indices
+            .iter()
+            .find(|idx| idx.name == FRAG_REUSE_INDEX_NAME)
+            .cloned();
+
+        let mut filtered = indices
+            .into_iter()
+            .filter(|idx| idx.name == name)
+            .collect::<Vec<_>>();
+
+        if !filtered.is_empty() {
+            if let Some(fri_meta) = frag_reuse_index_meta {
+                let uuid = fri_meta.uuid.to_string();
+                let fri_key = FragReuseIndexKey { uuid: &uuid };
+                let frag_reuse_index = self
+                    .index_cache
+                    .get_or_insert_with_key(fri_key, || async move {
+                        let index_details =
+                            load_frag_reuse_index_details(self, &fri_meta).await?;
+                        open_frag_reuse_index(fri_meta.uuid, index_details.as_ref()).await
+                    })
+                    .await?;
+                for idx in filtered.iter_mut() {
+                    if let Some(bitmap) = idx.fragment_bitmap.as_mut() {
+                        frag_reuse_index.remap_fragment_bitmap(bitmap)?;
+                    }
+                }
+            }
+        }
+
+        let indices = Arc::new(filtered);
+        self.index_cache
+            .insert_with_key(&metadata_key, indices.clone())
+            .await;
+        Ok(indices.as_ref().clone())
+    }
+
     async fn describe_indices<'a, 'b>(
         &'a self,
         criteria: Option<IndexCriteria<'b>>,
@@ -685,6 +747,18 @@ impl DatasetIndexExt for Dataset {
                 Ok(Arc::new(desc) as Arc<dyn IndexDescription>)
             })
             .collect::<Result<Vec<_>>>()
+    }
+
+    async fn describe_index(
+        &self,
+        index_name: &str,
+    ) -> Result<Option<Arc<dyn IndexDescription>>> {
+        let indices = self.load_indices_by_name(index_name).await?;
+        if indices.is_empty() {
+            return Ok(None);
+        }
+        let desc = IndexDescriptionImpl::try_new(indices, self)?;
+        Ok(Some(Arc::new(desc)))
     }
 
     async fn load_indices(&self) -> Result<Arc<Vec<IndexMetadata>>> {

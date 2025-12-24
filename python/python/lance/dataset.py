@@ -706,11 +706,7 @@ class LanceDataset(pa.dataset.Dataset):
         --------
         describe_indices : Get information about all indices in the dataset.
         """
-        indices = self.describe_indices()
-        for index in indices:
-            if index.name == index_name:
-                return index
-        raise KeyError(f"Index '{index_name}' not found")
+        return self._ds.describe_index(index_name)
 
     def index_statistics(self, index_name: str) -> Dict[str, Any]:
         warnings.warn(

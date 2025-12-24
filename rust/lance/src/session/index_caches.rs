@@ -103,6 +103,20 @@ impl CacheKey for IndexMetadataKey {
     }
 }
 
+#[derive(Debug)]
+pub struct IndexMetadataByNameKey<'a> {
+    pub version: u64,
+    pub name: &'a str,
+}
+
+impl CacheKey for IndexMetadataByNameKey<'_> {
+    type ValueType = Vec<IndexMetadata>;
+
+    fn key(&self) -> Cow<'_, str> {
+        Cow::Owned(format!("{}:{}", self.version, self.name))
+    }
+}
+
 pub struct ProstAny(pub Arc<prost_types::Any>);
 
 impl DeepSizeOf for ProstAny {

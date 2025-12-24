@@ -2517,74 +2517,19 @@ fn inner_describe_index<'local>(
     jindex_name: JString,
 ) -> Result<JObject<'local>> {
     let index_name: String = jindex_name.extract(env)?;
-    
-    let (index_meta, dataset) = {
+    let (description, total_rows) = {
         let dataset_guard =
             unsafe { env.get_rust_field::<_, _, BlockingDataset>(java_dataset, NATIVE_DATASET) }?;
-        let indexes = dataset_guard.list_indexes()?;
-        
-        // Find the index by name
-        let index = indexes
-            .iter()
-            .find(|idx| idx.name == index_name)
-            .ok_or_else(|| {
-                Error::input_error(format!("Index '{}' not found", index_name))
-            })?;
-        
-        ((**index).clone(), dataset_guard.inner.clone())
+        let desc = RT
+            .block_on(dataset_guard.inner.describe_index(&index_name))?
+            .ok_or_else(|| Error::input_error(format!("Index '{}' not found", index_name)))?;
+        let total_rows = RT.block_on(dataset_guard.inner.count_rows(None))? as u64;
+        (desc, total_rows)
     };
 
-    // Parse index type from index_details
-    // For now, we'll use a simplified approach - just check the type_url
-    let (index_type_str, distance_type): (&str, Option<&str>) = if let Some(details) = &index_meta.index_details {
-        if details.type_url.contains("VectorIndexMetadata") || details.type_url.contains("vector") {
-            ("VECTOR", None)
-        } else if details.type_url.contains("BTree") || details.type_url.contains("btree") {
-            ("BTREE", None)
-        } else if details.type_url.contains("Bitmap") || details.type_url.contains("bitmap") {
-            ("BITMAP", None)
-        } else if details.type_url.contains("LabelList") || details.type_url.contains("label") {
-            ("LABEL_LIST", None)
-        } else {
-            ("UNKNOWN", None)
-        }
-    } else {
-        ("UNKNOWN", None)
-    };
-
-    // Calculate indexed and unindexed rows
-    let (num_indexed_rows, num_unindexed_rows) = RT.block_on(async {
-        let total_rows = dataset.count_rows(None).await?;
-        
-        // Get all fragment IDs in the dataset
-        let all_fragments = dataset.get_fragments();
-        let all_fragment_ids: roaring::RoaringBitmap = all_fragments
-            .iter()
-            .map(|f| f.id() as u32)
-            .collect();
-        
-        // Get indexed fragment IDs
-        let indexed_rows = if let Some(fragment_bitmap) = &index_meta.fragment_bitmap {
-            let effective_bitmap = fragment_bitmap & &all_fragment_ids;
-            
-            // Count rows in indexed fragments
-            let mut count = 0u64;
-            for frag in all_fragments.iter() {
-                if effective_bitmap.contains(frag.id() as u32) {
-                    count += frag.count_rows().await? as u64;
-                }
-            }
-            count
-        } else {
-            // No fragment bitmap means we don't know which fragments are indexed
-            // For newly created indices on all fragments, assume all rows are indexed
-            total_rows as u64
-        };
-        
-        let unindexed_rows = (total_rows as u64).saturating_sub(indexed_rows);
-        
-        Ok::<(u64, u64), lance::Error>((indexed_rows, unindexed_rows))
-    })?;
+    let index_type_str = description.index_type().to_string();
+    let num_indexed_rows = description.rows_indexed();
+    let num_unindexed_rows = total_rows.saturating_sub(num_indexed_rows);
 
     // Create Java IndexDescription object using the builder pattern
     let builder_class = env.find_class("org/lance/index/IndexDescription$Builder")?;
@@ -2598,17 +2543,6 @@ fn inner_describe_index<'local>(
         "(Ljava/lang/String;)Lorg/lance/index/IndexDescription$Builder;",
         &[JValue::Object(&jindex_type)],
     )?;
-
-    // Set distance type if available
-    if let Some(dist_type) = distance_type {
-        let jdist_type = env.new_string(dist_type)?;
-        env.call_method(
-            &builder,
-            "distanceType",
-            "(Ljava/lang/String;)Lorg/lance/index/IndexDescription$Builder;",
-            &[JValue::Object(&jdist_type)],
-        )?;
-    }
 
     // Set num_indexed_rows
     let jnum_indexed = env.new_object(
@@ -2642,7 +2576,8 @@ fn inner_describe_index<'local>(
         "build",
         "()Lorg/lance/index/IndexDescription;",
         &[],
-    )?.l()?;
+    )?
+    .l()?;
 
     Ok(description)
 }

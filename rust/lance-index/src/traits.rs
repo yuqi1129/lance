@@ -291,10 +291,7 @@ pub trait DatasetIndexExt {
     async fn describe_index(
         &self,
         index_name: &str,
-    ) -> Result<Option<Arc<dyn IndexDescription>>> {
-        let indices = self.describe_indices(None).await?;
-        Ok(indices.into_iter().find(|idx| idx.name() == index_name))
-    }
+    ) -> Result<Option<Arc<dyn IndexDescription>>>;
 
     /// Loads a specific index with the given index name.
     async fn load_scalar_index<'a, 'b>(

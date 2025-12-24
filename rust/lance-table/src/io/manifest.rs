@@ -11,7 +11,7 @@ use lance_file::{
 use object_store::path::Path;
 use prost::Message;
 use snafu::location;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::{ops::Range, sync::Arc};
 use tracing::instrument;
 
@@ -131,6 +131,42 @@ pub async fn read_manifest_indexes(
         let indices = section
             .indices
             .into_iter()
+            .map(IndexMetadata::try_from)
+            .collect::<Result<Vec<_>>>()?;
+        Ok(indices)
+    } else {
+        Ok(vec![])
+    }
+}
+
+/// Read indices that match any of the provided names.
+///
+/// If the manifest has no index section, or no indices match, an empty vec is returned.
+pub async fn read_manifest_indexes_by_name(
+    object_store: &ObjectStore,
+    location: &ManifestLocation,
+    manifest: &Manifest,
+    names: &[&str],
+) -> Result<Vec<IndexMetadata>> {
+    if names.is_empty() {
+        return Ok(vec![]);
+    }
+
+    if let Some(pos) = manifest.index_section.as_ref() {
+        let reader = if let Some(size) = location.size {
+            object_store
+                .open_with_size(&location.path, size as usize)
+                .await?
+        } else {
+            object_store.open(&location.path).await?
+        };
+        let section: pb::IndexSection = read_message(reader.as_ref(), *pos).await?;
+        let names: HashSet<&str> = names.iter().copied().collect();
+
+        let indices = section
+            .indices
+            .into_iter()
+            .filter(|idx| names.contains(idx.name.as_str()))
             .map(IndexMetadata::try_from)
             .collect::<Result<Vec<_>>>()?;
         Ok(indices)
