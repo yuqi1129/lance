@@ -214,7 +214,8 @@ def from_lance(
     if isinstance(dataset, LanceDataset):
         if namespace is not None or table_id is not None:
             raise ValueError(
-                "Cannot specify 'namespace' or 'table_id' when passing a LanceDataset instance"
+                "Cannot specify 'namespace' or 'table_id' when passing "
+                "a LanceDataset instance"
             )
     else:
         dataset = lance.dataset(
